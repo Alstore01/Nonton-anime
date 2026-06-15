@@ -108,6 +108,14 @@ const GENRE_KEYWORDS = {
 const KATEGORI_LIST = Object.keys(GENRE_KEYWORDS);
 let sliderInterval;
 
+// Helper: Fetch with timeout
+function fetchWithTimeout(url, timeout = 5000) {
+    return Promise.race([
+        fetch(url),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout))
+    ]);
+}
+
 function toggleTheme() {
     const body = document.documentElement;
     const currentTheme = body.getAttribute('data-theme');
@@ -140,23 +148,20 @@ const hide = (id) => {
 };
 const loader = (state) => state ? show('loading') : hide('loading');
 
-// --- FUNGSI MENGAMBIL FOLLOWER WA (REAL-TIME/PROXY) ---
 async function fetchWAFollowers() {
     const countEl = document.getElementById('wa-follower-count');
     if(!countEl) return;
     try {
-        const res = await fetch(`https://cors.caliph.my.id/https://whatsapp.com/channel/0029Vb6ukqnHQbS4mKP0j80L`);
+        const res = await fetchWithTimeout(`https://cors.caliph.my.id/https://whatsapp.com/channel/0029Vb6ukqnHQbS4mKP0j80L`, 3000);
         const html = await res.text();
-        
-        // Coba temukan angka follower dengan RegEx
         const match = html.match(/([\d\.,]+(?:K|M)?)\s+followers/i) || html.match(/([\d\.,]+(?:K|M)?)\s+pengikut/i);
         if (match && match[1]) {
             countEl.innerText = match[1];
         } else {
-            countEl.innerText = "22.2K"; // Fallback aman
+            countEl.innerText = "22.2K";
         }
     } catch (err) {
-        countEl.innerText = "22.2K"; // Fallback jika diblokir server WA
+        countEl.innerText = "22.2K";
     }
 }
 
@@ -171,21 +176,6 @@ function switchTab(tabName) {
         show('home-view');
         document.getElementById('tab-home').classList.add('active');
         if (document.getElementById('home-view').innerHTML === '') loadLatest();
-        else {
-            const wrapper = document.getElementById('heroWrapper');
-            if (wrapper && !sliderInterval) {
-                const totalSlides = document.querySelectorAll('.hero-slide').length;
-                let currentSlide = 0;
-                sliderInterval = setInterval(() => {
-                    currentSlide++;
-                    wrapper.style.transition = 'transform 0.5s ease-in-out';
-                    wrapper.style.transform = `translateX(-${currentSlide * 100}%)`;
-                    if (currentSlide >= totalSlides - 1) {
-                        setTimeout(() => { wrapper.style.transition = 'none'; currentSlide = 0; wrapper.style.transform = `translateX(0)`; }, 500); 
-                    }
-                }, 5000);
-            }
-        }
     } else if (tabName === 'anime') {
         show('anime-view'); document.getElementById('tab-anime').classList.add('active'); renderCategoryPage(); 
     } else if (tabName === 'recent') {
@@ -195,7 +185,7 @@ function switchTab(tabName) {
     } else if (tabName === 'developer') {
         show('developer-view'); 
         document.getElementById('tab-developer').classList.add('active');
-        fetchWAFollowers(); // Auto Load Followers
+        fetchWAFollowers();
     }
 }
 
@@ -214,7 +204,11 @@ async function loadCategory(genre, btnElement) {
     try {
         let combinedData = [];
         const queriesToFetch = GENRE_KEYWORDS[genre] || [genre];
-        const promises = queriesToFetch.map(q => fetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`).then(res => res.json()).catch(() => []));
+        const promises = queriesToFetch.map(q => 
+            fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(q)}`, 5000)
+                .then(res => res.json())
+                .catch(() => [])
+        );
         const results = await Promise.all(promises);
         results.forEach(list => { if(Array.isArray(list)) combinedData = [...combinedData, ...list]; });
         combinedData = removeDuplicates(combinedData, 'url');
@@ -222,6 +216,7 @@ async function loadCategory(genre, btnElement) {
         const container = document.getElementById('category-results-container');
         if(!combinedData || combinedData.length === 0) {
             container.innerHTML = '<p style="text-align:center; color:var(--text-muted); margin-top:20px;">Tidak ada anime ditemukan.</p>';
+            loader(false);
             return;
         }
 
@@ -237,7 +232,8 @@ async function loadCategory(genre, btnElement) {
                         <h3 class="scroll-card-title">${anime.title}</h3>
                     </div>`).join('')}
             </div>`;
-    } catch (err) { console.error(err); } finally { loader(false); }
+        loader(false);
+    } catch (err) { console.error(err); loader(false); }
 }
 
 async function loadRecentHistory() {
@@ -245,10 +241,10 @@ async function loadRecentHistory() {
     container.innerHTML = '<div class="spinner"></div>';
     const historyData = await getHistory();
     if (!historyData || historyData.length === 0) {
-        container.innerHTML = `<div class="empty-state"><svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-bottom:15px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg><h2>Belum ada riwayat</h2><p>Anime yang baru saja kamu lihat akan muncul di sini.</p></div>`;
+        container.innerHTML = `<div class="empty-state"><svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-bottom:15px;"><circle cx="12" cy="12" r="10"></circle></svg><p>Belum ada history</p></div>`;
         return;
     }
-    container.innerHTML = `<div class="anime-grid">${historyData.map(anime => `<div class="scroll-card" onclick="loadDetail('${anime.url}')" style="min-width: auto; max-width: none;"><div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy"><div class="ep-badge">⭐ ${anime.score || '?'}</div></div><h3 class="scroll-card-title">${anime.title}</h3></div>`).join('')}</div>`;
+    container.innerHTML = `<div class="anime-grid">${historyData.map(anime => `<div class="scroll-card" onclick="loadDetail('${anime.url}')" style="min-width: auto; max-width: none;"><div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy"></div><h3 class="scroll-card-title">${anime.title}</h3></div>`).join('')}</div>`;
 }
 
 async function loadFavorites() {
@@ -256,10 +252,10 @@ async function loadFavorites() {
     container.innerHTML = '<div class="spinner"></div>';
     const favData = await getFavorites();
     if (!favData || favData.length === 0) {
-        container.innerHTML = `<div class="empty-state"><svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-bottom:15px;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg><h2>Belum ada Favorit</h2><p>Simpan anime kesukaanmu dengan menekan ikon hati.</p></div>`;
+        container.innerHTML = `<div class="empty-state"><svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-bottom:15px;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg><p>Belum ada favorit</p></div>`;
         return;
     }
-    container.innerHTML = `<div class="anime-grid">${favData.map(anime => `<div class="scroll-card" onclick="loadDetail('${anime.url}')" style="min-width: auto; max-width: none;"><div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy"><div class="ep-badge">⭐ ${anime.score || '?'}</div></div><h3 class="scroll-card-title">${anime.title}</h3></div>`).join('')}</div>`;
+    container.innerHTML = `<div class="anime-grid">${favData.map(anime => `<div class="scroll-card" onclick="loadDetail('${anime.url}')" style="min-width: auto; max-width: none;"><div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy"></div><h3 class="scroll-card-title">${anime.title}</h3></div>`).join('')}</div>`;
 }
 
 async function loadLatest() {
@@ -270,7 +266,13 @@ async function loadLatest() {
     try {
         const sliderSection = HOME_SECTIONS[0]; 
         let sliderData = [];
-        try { const res = await fetch(`${API_BASE}/latest`); sliderData = await res.json(); } catch (e) {}
+        
+        try { 
+            const res = await fetchWithTimeout(`${API_BASE}/latest`, 5000); 
+            sliderData = await res.json(); 
+        } catch (e) {
+            console.error('Failed to fetch latest:', e.message);
+        }
 
         if (sliderData && sliderData.length > 0) {
             const top10 = sliderData.slice(0, 10);
@@ -279,7 +281,7 @@ async function loadLatest() {
 
             top10.forEach(async (item) => {
                 try {
-                    const detailRes = await fetch(`${API_BASE}/detail?url=${encodeURIComponent(item.url)}`);
+                    const detailRes = await fetchWithTimeout(`${API_BASE}/detail?url=${encodeURIComponent(item.url)}`, 5000);
                     const detailData = await detailRes.json();
                     if (detailData && detailData.info) {
                         const score = detailData.info.skor || detailData.info.score || 'N/A';
@@ -291,26 +293,39 @@ async function loadLatest() {
                         const metaElements = document.querySelectorAll(`.hero-meta[data-url="${item.url}"]`);
                         metaElements.forEach(el => { el.innerHTML = `<span>⭐ ${score}</span> • <span>${type}</span> • <span>${year}</span>`; });
                     }
-                } catch (e) {}
+                } catch (e) { console.error('Detail fetch failed:', e); }
             });
-        } else { loader(false); }
+        } else { 
+            loader(false);
+            homeContainer.innerHTML = '<p style="text-align:center; padding:20px;">Gagal memuat data anime. Silahkan refresh halaman.</p>';
+        }
 
         for (let i = 1; i < HOME_SECTIONS.length; i++) {
             const section = HOME_SECTIONS[i];
             (async () => {
-                let combinedData = [];
-                const promises = section.queries.map(q => fetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`).then(res => res.json()).catch(() => []));
-                const results = await Promise.all(promises);
-                results.forEach(list => { if(Array.isArray(list)) combinedData = [...combinedData, ...list]; });
-                combinedData = removeDuplicates(combinedData, 'url');
+                try {
+                    let combinedData = [];
+                    // Batasi concurrent requests
+                    for (const q of section.queries.slice(0, 2)) {
+                        try {
+                            const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(q)}`, 5000);
+                            const result = await res.json();
+                            if (Array.isArray(result)) combinedData = [...combinedData, ...result];
+                        } catch (e) {}
+                    }
+                    combinedData = removeDuplicates(combinedData, 'url');
 
-                if (combinedData.length > 0) {
-                    if (combinedData.length < 6) combinedData = [...combinedData, ...combinedData, ...combinedData];
-                    renderSection(section.title, combinedData.slice(0, 15), homeContainer);
-                }
+                    if (combinedData.length > 0) {
+                        renderSection(section.title, combinedData.slice(0, 15), homeContainer);
+                    }
+                } catch (err) { console.error(err); }
             })();
         }
-    } catch (err) { loader(false); }
+    } catch (err) { 
+        console.error('loadLatest error:', err);
+        loader(false);
+        homeContainer.innerHTML = '<p style="text-align:center; padding:20px;">Terjadi kesalahan. Silahkan refresh halaman.</p>';
+    }
 }
 
 function removeDuplicates(array, key) { return [ ...new Map(array.map(item => [item[key], item])).values() ]; }
@@ -325,13 +340,15 @@ function renderHeroSlider(title, data, container) {
     const loopData = [...data, data[0]];
 
     const slidesHtml = loopData.map((anime, index) => {
-        const score = anime.score || 'N/A'; const type = anime.type || 'Anime'; const year = anime.year || 'Unknown';
+        const score = anime.score || 'N/A'; 
+        const type = anime.type || 'Anime'; 
+        const year = anime.year || 'Unknown';
         let epNumMatch = anime.episode ? anime.episode.match(/\d+(\.\d+)?/) : null;
         let eps = epNumMatch ? `Ep ${epNumMatch[0]}` : (anime.episode ? `Ep ${anime.episode}` : '');
 
         return `
             <div class="hero-slide">
-                <img src="${anime.image}" class="hero-bg" alt="${anime.title}" loading="${index === 0 ? 'eager' : 'lazy'}">
+                <img src="${anime.image}" class="hero-bg" alt="${anime.title}" loading="${index === 0 ? 'eager' : 'lazy'}" onerror="this.src='https://via.placeholder.com/1200x400'">
                 <div class="hero-overlay"></div>
                 <div class="hero-content">
                     ${eps ? `<div class="hero-badge">${eps}</div>` : ''}
@@ -347,33 +364,15 @@ function renderHeroSlider(title, data, container) {
     
     if (container.firstChild) container.insertBefore(sectionContainer, container.firstChild);
     else container.appendChild(sectionContainer);
-
-    const wrapper = document.getElementById('heroWrapper');
-    let currentSlide = 0;
-    const totalSlides = loopData.length;
-
-    if (sliderInterval) clearInterval(sliderInterval);
-
-    sliderInterval = setInterval(() => {
-        if (!wrapper || document.getElementById('home-view').classList.contains('hidden')) return;
-        currentSlide++;
-        wrapper.style.transition = 'transform 0.5s ease-in-out';
-        wrapper.style.transform = `translateX(-${currentSlide * 100}%)`;
-        if (currentSlide === totalSlides - 1) {
-            setTimeout(() => { wrapper.style.transition = 'none'; currentSlide = 0; wrapper.style.transform = `translateX(0)`; }, 500); 
-        }
-    }, 5000); 
 }
 
 function renderSection(title, data, container) {
     const sectionDiv = document.createElement('div');
     sectionDiv.className = 'category-section';
-    const searchKeyword = title.split(' ')[0];
 
     const headerHtml = `
         <div class="header-flex">
             <div class="section-header"><div class="bar-accent"></div><h2>${title}</h2></div>
-            <a href="#" class="more-link" onclick="handleSearch('${searchKeyword}')">Lainnya</a>
         </div>`;
 
     const cardsHtml = data.map(anime => {
@@ -381,7 +380,7 @@ function renderSection(title, data, container) {
         const displayTitle = anime.title.length > 35 ? anime.title.substring(0, 35) + '...' : anime.title;
         return `
         <div class="scroll-card" onclick="loadDetail('${anime.url}')">
-            <div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy"><div class="ep-badge">Ep ${eps}</div></div>
+            <div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy" onerror="this.src='https://via.placeholder.com/300x400'"><div class="ep-badge">Ep ${eps}</div></div>
             <div class="scroll-card-title">${displayTitle}</div>
         </div>`;
     }).join('');
@@ -399,7 +398,7 @@ async function handleSearch(manualQuery = null) {
     switchTab('home');
     loader(true);
     try {
-        const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}`);
+        const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(query)}`, 5000);
         const data = await res.json();
         
         const homeContainer = document.getElementById('home-view');
@@ -412,18 +411,20 @@ async function handleSearch(manualQuery = null) {
             <div class="anime-grid">
                 ${data.map(anime => `
                     <div class="scroll-card" onclick="loadDetail('${anime.url}')" style="min-width: auto; max-width: none;">
-                        <div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy"><div class="ep-badge">Ep ${anime.score || '?'}</div></div>
+                        <div class="scroll-card-img"><img src="${anime.image}" alt="${anime.title}" loading="lazy" onerror="this.src='https://via.placeholder.com/300x400'"><div class="ep-badge">Ep ${anime.score || '?'}</div></div>
                         <h3 class="scroll-card-title">${anime.title}</h3>
                     </div>`).join('')}
             </div>`;
         homeContainer.appendChild(resultSection);
-    } catch (err) {} finally { loader(false); }
+    } catch (err) { 
+        console.error('Search error:', err);
+    } finally { loader(false); }
 }
 
 async function loadDetail(url) {
     loader(true);
     try {
-        const res = await fetch(`${API_BASE}/detail?url=${encodeURIComponent(url)}`);
+        const res = await fetchWithTimeout(`${API_BASE}/detail?url=${encodeURIComponent(url)}`, 8000);
         const data = await res.json();
         
         hide('home-view'); hide('anime-view'); hide('recent-view');
@@ -479,11 +480,11 @@ async function loadDetail(url) {
             <div class="detail-subtitle">${info.japanese || data.title}</div>
 
             <div class="detail-main-layout">
-                <div class="detail-poster"><img src="${data.image}" alt="${data.title}"></div>
+                <div class="detail-poster"><img src="${data.image}" alt="${data.title}" onerror="this.src='https://via.placeholder.com/300x400'"></div>
                 <div class="detail-info-col">
                     <div class="detail-badges">
                         <span class="badge status">${status.replace(' ', '_')}</span>
-                        <span class="badge score"><svg width="12" height="12" viewBox="0 0 24 24" fill="#fbbf24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> ${score}</span>
+                        <span class="badge score"><svg width="12" height="12" viewBox="0 0 24 24" fill="#fbbf24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg> ${score}</span>
                         <span class="badge type">${type}</span>
                     </div>
                     <div class="detail-genres">${genres.map(g => `<span class="genre-tag">${g}</span>`).join('')}</div>
@@ -504,10 +505,10 @@ async function loadDetail(url) {
             </div>
         `;
 
-        document.getElementById('episode-header-container').innerHTML = `<div class="ep-header-wrapper"><h2 class="ep-header-title">Daftar Episode</h2>${isEpsExist ? `<div class="ep-range-badge">1 - ${newestEpNum}</div>` : ''}</div>`;
+        document.getElementById('episode-header-container').innerHTML = `<div class="ep-header-wrapper"><h2 class="ep-header-title">Daftar Episode</h2>${isEpsExist ? `<div class="ep-range-badge">${totalEpCount} Episode</div>` : ''}</div>`;
 
         const epGrid = document.getElementById('episode-grid');
-        epGrid.innerHTML = data.episodes.map(ep => {
+        epGrid.innerHTML = (data.episodes || []).map(ep => {
             let displayTitle = '';
             let epNumMatch = ep.title.match(/(?:Episode|Eps|Ep)\s*(\d+(\.\d+)?)/i);
             if (epNumMatch) displayTitle = epNumMatch[1];
@@ -516,13 +517,15 @@ async function loadDetail(url) {
             return `<div class="ep-box" title="${ep.title}" onclick="loadVideo('${ep.url}')">${displayTitle}</div>`;
         }).join('');
 
-    } catch (err) { console.error(err); } finally { loader(false); }
+    } catch (err) { 
+        console.error('loadDetail error:', err);
+    } finally { loader(false); }
 }
 
 async function loadVideo(url) {
     loader(true);
     try {
-        const res = await fetch(`${API_BASE}/watch?url=${encodeURIComponent(url)}`);
+        const res = await fetchWithTimeout(`${API_BASE}/watch?url=${encodeURIComponent(url)}`, 8000);
         const data = await res.json();
         hide('detail-view'); show('watch-view'); hide('bottomNav'); 
 
@@ -530,11 +533,14 @@ async function loadVideo(url) {
         const player = document.getElementById('video-player');
         const serverContainer = document.getElementById('server-options');
 
-        if (data.streams.length > 0) {
+        if (data.streams && data.streams.length > 0) {
             player.src = data.streams[0].url;
-            serverContainer.innerHTML = data.streams.map((stream, index) => `<button class="server-tag ${index === 0 ? 'active' : ''}" onclick="changeServer('${stream.url}', this)">${stream.server}</button>`).join('');
+            serverContainer.innerHTML = data.streams.map((stream, index) => `<button class="server-tag ${index === 0 ? 'active' : ''}" onclick="changeServer('${stream.url}', this)">${stream.server || 'Server'}</button>`).join('');
         } else alert('Maaf, stream belum tersedia untuk episode ini.');
-    } catch (err) { } finally { loader(false); }
+    } catch (err) { 
+        console.error('loadVideo error:', err);
+        alert('Gagal memuat video');
+    } finally { loader(false); }
 }
 
 function changeServer(url, btn) {
