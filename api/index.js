@@ -9,12 +9,13 @@ app.use(cors());
 const headers = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,/;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9'
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://v18.kuramanime.ing/'
 };
 
 // Axios instance dengan timeout
 const axiosInstance = axios.create({
-  timeout: 10000, // 10 detik timeout
+  timeout: 15000, // 15 detik timeout
   headers
 });
 
@@ -23,27 +24,32 @@ const axiosInstance = axios.create({
 async function animeterbaru(page = 1) {
   try {
     console.log(`Fetching anime terbaru page ${page}...`);
-    const res = await axiosInstance.get(`https://cors.caliph.my.id/https://v18.kuramanime.ing/anime/page/${page}/`);
+    const res = await axiosInstance.get(`https://v18.kuramanime.ing/anime/page/${page}/`);
     const $ = cheerio.load(res.data);
     const data = [];
     
     // Debug: cek jumlah element yang ditemukan
-    const elements = $('.post-show ul li, .series-list li, .animelist li');
+    const elements = $('div.post-item, div.anime-item, div.series-item, li.post-show');
     console.log(`Found ${elements.length} elements`);
     
     elements.each((_, e) => {
-      const a = $(e).find('a.link-title, a[title], a');
-      const title = a.attr('title') || a.text().trim();
-      const url = a.attr('href');
-      const image = $(e).find('img').attr('src') || $(e).find('img').attr('data-src');
-      
-      if (title && url) {
-        data.push({
-          title: title,
-          url: url,
-          image: image || '',
-          episode: $(e).find('.ep-label, .episode-label, .epsnum').text().trim() || 'N/A',
-        });
+      try {
+        const a = $(e).find('a').first();
+        const title = a.attr('title') || a.text().trim();
+        const url = a.attr('href');
+        const img = $(e).find('img');
+        const image = img.attr('src') || img.attr('data-src');
+        
+        if (title && url) {
+          data.push({
+            title: title,
+            url: url,
+            image: image || '',
+            episode: $(e).find('.ep-last, .ep-label, .epsnum').text().trim() || 'N/A',
+          });
+        }
+      } catch (itemError) {
+        console.error('Error parsing item:', itemError.message);
       }
     });
     
@@ -51,30 +57,38 @@ async function animeterbaru(page = 1) {
     return data;
   } catch (error) {
     console.error('Error in animeterbaru:', error.message);
-    throw new Error(`Failed to fetch anime: ${error.message}`);
+    return [];
   }
 }
 
 async function search(query) {
   try {
     console.log(`Searching for: ${query}`);
-    const res = await axiosInstance.get(`https://cors.caliph.my.id/https://v18.kuramanime.ing/?s=${encodeURIComponent(query)}`);
+    const res = await axiosInstance.get(`https://v18.kuramanime.ing/?s=${encodeURIComponent(query)}`);
     const $ = cheerio.load(res.data);
     const data = [];
     
-    $('.animpost, .post-item, .anime-item').each((_, e) => {
-      const a = $(e).find('a[title], a');
-      const title = a.attr('title') || $(e).find('.data .title h2, h2, .anime-title').text().trim();
-      const url = a.attr('href');
-      
-      if (title && url) {
-        data.push({
-          title: title,
-          image: $(e).find('img').attr('src') || $(e).find('img').attr('data-src') || '',
-          type: $(e).find('.type, .anime-type').text().trim() || 'N/A',
-          score: $(e).find('.score, .rating').text().trim() || 'N/A',
-          url: url
-        });
+    const elements = $('.animpost, div.post-item, div.anime-item, li.anime-search');
+    console.log(`Found ${elements.length} search results`);
+    
+    elements.each((_, e) => {
+      try {
+        const a = $(e).find('a').first();
+        const title = a.attr('title') || $(e).find('.data .title h2, h2, .anime-title').text().trim() || a.text().trim();
+        const url = a.attr('href');
+        
+        if (title && url) {
+          const img = $(e).find('img');
+          data.push({
+            title: title,
+            image: img.attr('src') || img.attr('data-src') || '',
+            type: $(e).find('.type, .anime-type').text().trim() || 'N/A',
+            score: $(e).find('.score, .rating').text().trim() || 'N/A',
+            url: url
+          });
+        }
+      } catch (itemError) {
+        console.error('Error parsing search item:', itemError.message);
       }
     });
     
@@ -82,44 +96,55 @@ async function search(query) {
     return data;
   } catch (error) {
     console.error('Error in search:', error.message);
-    throw new Error(`Search failed: ${error.message}`);
+    return [];
   }
 }
 
 async function detail(link) {
   try {
     console.log(`Getting detail for: ${link}`);
-    // Pastikan link memiliki prefix proxy jika belum ada
+    // Pastikan link memiliki prefix jika belum ada
     const targetUrl = link.startsWith('http') ? link : `https://v18.kuramanime.ing${link}`;
-    const res = await axiosInstance.get(`https://cors.caliph.my.id/${targetUrl}`);
+    const res = await axiosInstance.get(targetUrl);
     const $ = cheerio.load(res.data);
 
     const episodes = [];
-    $('.lstepsiode ul li, .episodes-list li, .ep-item').each((_, e) => {
-      const a = $(e).find('a');
-      const title = a.text().trim();
-      const url = a.attr('href');
-      
-      if (title && url) {
-        episodes.push({
-          title: title,
-          url: url,
-          date: $(e).find('.date, .ep-date').text().trim() || 'N/A'
-        });
+    const episodeElements = $('.lstepsiode ul li, .episodes-list li, .ep-item, ol li');
+    console.log(`Found ${episodeElements.length} episodes`);
+    
+    episodeElements.each((_, e) => {
+      try {
+        const a = $(e).find('a').first();
+        const title = a.text().trim();
+        const url = a.attr('href');
+        
+        if (title && url) {
+          episodes.push({
+            title: title,
+            url: url,
+            date: $(e).find('.date, .ep-date').text().trim() || 'N/A'
+          });
+        }
+      } catch (epError) {
+        console.error('Error parsing episode:', epError.message);
       }
     });
 
     const info = {};
-    $('.anim-senct .right-senc .spe span, .anime-info span').each((_, e) => {
-      const t = $(e).text();
-      if (t.includes(':')) {
-        const [k, v] = t.split(':');
-        info[k.trim().toLowerCase().replace(/\s+/g, '_')] = v.trim();
+    $('.anim-senct .right-senc .spe span, .anime-info span, .anime-detail span').each((_, e) => {
+      try {
+        const t = $(e).text();
+        if (t.includes(':')) {
+          const [k, v] = t.split(':');
+          info[k.trim().toLowerCase().replace(/\s+/g, '_')] = v.trim();
+        }
+      } catch (infoError) {
+        console.error('Error parsing info:', infoError.message);
       }
     });
 
     const detail_data = {
-      title: $('title').text().replace(' - Kuramanime', '').replace(' - ', '').trim(),
+      title: $('title').text().replace(' - Kuramanime', '').replace(' - ', '').trim() || 'N/A',
       image: $('meta[property="og:image"]').attr('content') || '',
       description: $('.entry-content').text().trim() || $('meta[name="description"]').attr('content') || '',
       episodes: episodes,
@@ -130,7 +155,13 @@ async function detail(link) {
     return detail_data;
   } catch (error) {
     console.error('Error in detail:', error.message);
-    throw new Error(`Failed to get detail: ${error.message}`);
+    return {
+      title: 'Error',
+      image: '',
+      description: error.message,
+      episodes: [],
+      info: {}
+    };
   }
 }
 
@@ -138,47 +169,57 @@ async function download(link) {
   try {
     console.log(`Getting download links for: ${link}`);
     const targetUrl = link.startsWith('http') ? link : `https://v18.kuramanime.ing${link}`;
-    const res = await axiosInstance.get(`https://cors.caliph.my.id/${targetUrl}`);
+    const res = await axiosInstance.get(targetUrl);
     const cookies = res.headers['set-cookie']?.map(v => v.split(';')[0]).join('; ') || '';
     const $ = cheerio.load(res.data);
     const data = [];
 
-    for (const li of $('div#server > ul > li, .server-list li').toArray()) {
-      const div = $(li).find('div');
-      const post = div.attr('data-post');
-      const nume = div.attr('data-nume');
-      const type = div.attr('data-type');
-      const name = $(li).find('span').text().trim();
-      
-      if (!post) continue;
+    const serverElements = $('div#server > ul > li, .server-list li, .servers li');
+    console.log(`Found ${serverElements.length} servers`);
 
-      const body = new URLSearchParams({ action: 'player_ajax', post, nume, type }).toString();
-      
+    for (const li of serverElements.toArray()) {
       try {
-          const r = await axiosInstance.post('https://cors.caliph.my.id/https://v18.kuramanime.ing/wp-admin/admin-ajax.php', body, {
-          headers: {
-              ...headers,
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Cookie': cookies,
-              'Referer': targetUrl
-          }
-          });
-          const $$ = cheerio.load(r.data);
-          const iframe = $$('iframe').attr('src');
-          if (iframe) data.push({ server: name, url: iframe });
-      } catch (e) {
-          console.log("Error fetching server:", name, e.message);
+        const div = $(li).find('div');
+        const post = div.attr('data-post');
+        const nume = div.attr('data-nume');
+        const type = div.attr('data-type');
+        const name = $(li).find('span').text().trim();
+        
+        if (!post) continue;
+
+        const body = new URLSearchParams({ action: 'player_ajax', post, nume, type }).toString();
+        
+        try {
+            const r = await axiosInstance.post('https://v18.kuramanime.ing/wp-admin/admin-ajax.php', body, {
+            headers: {
+                ...headers,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Cookie': cookies,
+                'Referer': targetUrl
+            }
+            });
+            const $$ = cheerio.load(r.data);
+            const iframe = $$('iframe').attr('src');
+            if (iframe) data.push({ server: name, url: iframe });
+        } catch (e) {
+            console.log("Error fetching server:", name, e.message);
+        }
+      } catch (serverError) {
+        console.error('Error parsing server:', serverError.message);
       }
     }
 
     console.log(`Found ${data.length} streams`);
     return {
-      title: $('h1[itemprop="name"]').text().trim(),
+      title: $('h1[itemprop="name"]').text().trim() || 'N/A',
       streams: data
     };
   } catch (error) {
     console.error('Error in download:', error.message);
-    throw new Error(`Failed to get download links: ${error.message}`);
+    return {
+      title: 'Error',
+      streams: []
+    };
   }
 }
 
@@ -196,6 +237,9 @@ app.get('/api/latest', async (req, res) => {
 
 app.get('/api/search', async (req, res) => {
   try {
+    if (!req.query.q) {
+      return res.status(400).json({ error: 'Query parameter "q" is required' });
+    }
     const data = await search(req.query.q);
     res.json(data);
   } catch (e) { 
@@ -206,6 +250,9 @@ app.get('/api/search', async (req, res) => {
 
 app.get('/api/detail', async (req, res) => {
   try {
+    if (!req.query.url) {
+      return res.status(400).json({ error: 'Query parameter "url" is required' });
+    }
     const data = await detail(req.query.url);
     res.json(data);
   } catch (e) { 
@@ -216,6 +263,9 @@ app.get('/api/detail', async (req, res) => {
 
 app.get('/api/watch', async (req, res) => {
   try {
+    if (!req.query.url) {
+      return res.status(400).json({ error: 'Query parameter "url" is required' });
+    }
     const data = await download(req.query.url);
     res.json(data);
   } catch (e) { 
@@ -226,7 +276,22 @@ app.get('/api/watch', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK' });
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Nonton Anime API',
+    version: '1.0',
+    endpoints: {
+      health: '/health',
+      latest: '/api/latest?page=1',
+      search: '/api/search?q=naruto',
+      detail: '/api/detail?url=/anime/naruto-shippuden/',
+      watch: '/api/watch?url=/episode/naruto-shippuden-episode-1/'
+    }
+  });
 });
 
 const serverless = require('serverless-http');
