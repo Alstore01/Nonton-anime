@@ -6,6 +6,10 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
+// Cache untuk mengurangi request yang sama
+const cache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 menit
+
 const headers = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,/;q=0.8',
@@ -15,20 +19,37 @@ const headers = {
 
 // Axios instance dengan timeout
 const axiosInstance = axios.create({
-  timeout: 15000, // 15 detik timeout
+  timeout: 12000,
   headers
 });
+
+function getCached(key) {
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    console.log(`Cache HIT for: ${key}`);
+    return cached.data;
+  }
+  cache.delete(key);
+  return null;
+}
+
+function setCached(key, data) {
+  cache.set(key, { data, timestamp: Date.now() });
+}
 
 // --- KODE SCRAPER ANDA (Disesuaikan untuk API) ---
 
 async function animeterbaru(page = 1) {
   try {
     console.log(`Fetching anime terbaru page ${page}...`);
+    const cacheKey = `latest_${page}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
     const res = await axiosInstance.get(`https://v18.kuramanime.ing/anime/page/${page}/`);
     const $ = cheerio.load(res.data);
     const data = [];
     
-    // Debug: cek jumlah element yang ditemukan
     const elements = $('div.post-item, div.anime-item, div.series-item, li.post-show');
     console.log(`Found ${elements.length} elements`);
     
@@ -40,20 +61,21 @@ async function animeterbaru(page = 1) {
         const img = $(e).find('img');
         const image = img.attr('src') || img.attr('data-src');
         
-        if (title && url) {
+        if (title && url && image) {
           data.push({
             title: title,
             url: url,
-            image: image || '',
+            image: image,
             episode: $(e).find('.ep-last, .ep-label, .epsnum').text().trim() || 'N/A',
           });
         }
       } catch (itemError) {
-        console.error('Error parsing item:', itemError.message);
+        // Skip problematic items
       }
     });
     
     console.log(`Returning ${data.length} anime`);
+    setCached(cacheKey, data);
     return data;
   } catch (error) {
     console.error('Error in animeterbaru:', error.message);
@@ -63,36 +85,44 @@ async function animeterbaru(page = 1) {
 
 async function search(query) {
   try {
+    if (!query || query.trim().length === 0) return [];
+    
     console.log(`Searching for: ${query}`);
+    const cacheKey = `search_${query.toLowerCase()}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
     const res = await axiosInstance.get(`https://v18.kuramanime.ing/?s=${encodeURIComponent(query)}`);
     const $ = cheerio.load(res.data);
     const data = [];
     
     const elements = $('.animpost, div.post-item, div.anime-item, li.anime-search');
-    console.log(`Found ${elements.length} search results`);
+    console.log(`Found ${elements.length} search results for "${query}"`);
     
     elements.each((_, e) => {
       try {
         const a = $(e).find('a').first();
         const title = a.attr('title') || $(e).find('.data .title h2, h2, .anime-title').text().trim() || a.text().trim();
         const url = a.attr('href');
+        const img = $(e).find('img');
+        const image = img.attr('src') || img.attr('data-src');
         
-        if (title && url) {
-          const img = $(e).find('img');
+        if (title && url && image) {
           data.push({
             title: title,
-            image: img.attr('src') || img.attr('data-src') || '',
-            type: $(e).find('.type, .anime-type').text().trim() || 'N/A',
+            image: image,
+            type: $(e).find('.type, .anime-type').text().trim() || 'Anime',
             score: $(e).find('.score, .rating').text().trim() || 'N/A',
             url: url
           });
         }
       } catch (itemError) {
-        console.error('Error parsing search item:', itemError.message);
+        // Skip problematic items
       }
     });
     
     console.log(`Found ${data.length} results`);
+    setCached(cacheKey, data);
     return data;
   } catch (error) {
     console.error('Error in search:', error.message);
@@ -103,7 +133,10 @@ async function search(query) {
 async function detail(link) {
   try {
     console.log(`Getting detail for: ${link}`);
-    // Pastikan link memiliki prefix jika belum ada
+    const cacheKey = `detail_${link}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
     const targetUrl = link.startsWith('http') ? link : `https://v18.kuramanime.ing${link}`;
     const res = await axiosInstance.get(targetUrl);
     const $ = cheerio.load(res.data);
@@ -126,7 +159,7 @@ async function detail(link) {
           });
         }
       } catch (epError) {
-        console.error('Error parsing episode:', epError.message);
+        // Skip problematic episodes
       }
     });
 
@@ -136,10 +169,12 @@ async function detail(link) {
         const t = $(e).text();
         if (t.includes(':')) {
           const [k, v] = t.split(':');
-          info[k.trim().toLowerCase().replace(/\s+/g, '_')] = v.trim();
+          if (k && v) {
+            info[k.trim().toLowerCase().replace(/\s+/g, '_')] = v.trim();
+          }
         }
       } catch (infoError) {
-        console.error('Error parsing info:', infoError.message);
+        // Skip problematic info
       }
     });
 
@@ -151,14 +186,15 @@ async function detail(link) {
       info: info
     };
     
-    console.log(`Detail retrieved: ${detail_data.title}`);
+    console.log(`Detail retrieved: ${detail_data.title} (${episodes.length} episodes)`);
+    setCached(cacheKey, detail_data);
     return detail_data;
   } catch (error) {
     console.error('Error in detail:', error.message);
     return {
-      title: 'Error',
+      title: 'Error Loading',
       image: '',
-      description: error.message,
+      description: 'Gagal memuat detail anime.',
       episodes: [],
       info: {}
     };
@@ -202,16 +238,16 @@ async function download(link) {
             const iframe = $$('iframe').attr('src');
             if (iframe) data.push({ server: name, url: iframe });
         } catch (e) {
-            console.log("Error fetching server:", name, e.message);
+            console.log("Error fetching server:", name);
         }
       } catch (serverError) {
-        console.error('Error parsing server:', serverError.message);
+        // Skip problematic servers
       }
     }
 
     console.log(`Found ${data.length} streams`);
     return {
-      title: $('h1[itemprop="name"]').text().trim() || 'N/A',
+      title: $('h1[itemprop="name"]').text().trim() || 'Unknown Episode',
       streams: data
     };
   } catch (error) {
@@ -228,7 +264,7 @@ async function download(link) {
 app.get('/api/latest', async (req, res) => {
   try {
     const data = await animeterbaru(req.query.page || 1);
-    res.json(data);
+    res.json(data.slice(0, 20)); // Limit to 20 items
   } catch (e) { 
     console.error('API Error:', e);
     res.status(500).json({ error: e.message }); 
@@ -241,7 +277,7 @@ app.get('/api/search', async (req, res) => {
       return res.status(400).json({ error: 'Query parameter "q" is required' });
     }
     const data = await search(req.query.q);
-    res.json(data);
+    res.json(data.slice(0, 30)); // Limit to 30 items
   } catch (e) { 
     console.error('API Error:', e);
     res.status(500).json({ error: e.message }); 
@@ -276,14 +312,15 @@ app.get('/api/watch', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ status: 'OK', timestamp: new Date().toISOString(), cacheSize: cache.size });
 });
 
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
-    message: 'Nonton Anime API',
-    version: '1.0',
+    message: 'Nonton Anime API (Kuramanime v18)',
+    version: '2.0',
+    features: ['Caching (5min TTL)', 'Limited results', 'Error handling'],
     endpoints: {
       health: '/health',
       latest: '/api/latest?page=1',
@@ -299,7 +336,6 @@ const serverless = require('serverless-http');
 if (process.env.VERCEL) {
   module.exports = serverless(app);
 } else {
-  // Untuk Local Development
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   module.exports = app;
