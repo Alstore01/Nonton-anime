@@ -149,8 +149,13 @@ app.get('/api/watch', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Untuk Local Development
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const serverless = require('serverless-http');
 
-module.exports = app;
+if (process.env.VERCEL) {
+  module.exports = serverless(app);
+} else {
+  // Untuk Local Development
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  module.exports = app;
+}
